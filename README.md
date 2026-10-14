@@ -6,6 +6,10 @@ role with the rows the macro in `../csv_convert/` produces today, streamed into
 `<stem>.<role>.csv.zip`. One process, one thread, one loop over entries. Dependencies: podio,
 EDM4HEP, EDM4EIC, zlib, fmt, minizip-ng (downloaded at configure time). No framework.
 
+This repository is mounted as the `eic2ai/` submodule of
+[msf-simulation-pipeline](https://github.com/JeffersonLab/msf-simulation-pipeline); paths like
+`../csv_convert/` and the parity tests assume that layout.
+
 ```
 eic2ai --reco in.edm4eic.root --sim in.edm4hep.root --out-dir DIR \
        --writers trk_hits,cal_hits,calo_clusters [--compress zip|none|gz] [-n N]
