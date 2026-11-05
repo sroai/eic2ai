@@ -5,6 +5,12 @@
 // background). Geant4 secondaries have generatorStatus 0 whatever their ancestry; for them
 // the first generator ancestor up the parent chain decides.
 //
+// TimeframeBuilder (EDM4hep mode, after Geant4) adds the offset to every particle of a
+// background sub-event, secondaries included: a Geant4 secondary of a SynRad photon carries
+// 2000, the photon itself 2001. A status >= 1000 that is a multiple of 1000 is therefore a
+// secondary (0 + offset) and gets origin 4 directly; merger files never produce such a status,
+// so their prt_origin is unchanged.
+//
 // prt_origin values written to every CSV:
 //   0 unknown, 1 signal, 2 Geant4 secondary of a signal particle,
 //   3 background, 4 Geant4 secondary of a background particle.
@@ -28,6 +34,9 @@ inline int32_t classify_gen_status(int32_t gen_status) {
 /// 0 unknown, 1 signal, 2 g4-from-signal, 3 background, 4 g4-from-background.
 inline int32_t get_origin_status(const edm4hep::MCParticle& particle) {
     const int32_t gen_status = particle.getGeneratorStatus();
+    if (gen_status >= 1000 && gen_status % 1000 == 0) {
+        return 4;   // TimeframeBuilder: a Geant4 secondary (status 0) carrying its sub-event's offset
+    }
     if (gen_status != 0) {
         return classify_gen_status(gen_status);
     }
