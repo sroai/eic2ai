@@ -1,0 +1,43 @@
+# The CSV schema page of the website (website/ai-epic-background/csv-schema.yaml) must list every column eic2ai
+# writes. tests/columns.txt is the committed `eic2ai --list-columns` output: the first job checks the page and the
+# column vocabulary against it, the second builds eic2ai in eic_xl and checks that it still prints that file.
+name: CSV schema
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  schema-page:
+    name: Website schema lists every column
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: tests/columns.txt matches website/ai-epic-background/csv-schema.yaml
+        run: python tests/check_schema.py
+      - name: Column names follow the vocabulary
+        run: python tests/check_columns.py --headers tests/columns.txt
+
+  built-headers:
+    name: Built eic2ai prints tests/columns.txt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cvmfs-contrib/github-action-cvmfs@v5
+      - name: Build eic2ai and list its columns
+        uses: eic/run-cvmfs-osg-eic-shell@main
+        with:
+          platform-release: "eic_xl:26.11.0-stable"
+          run: |
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+            cmake --build build -j $(getconf _NPROCESSORS_ONLN)
+            ./build/eic2ai --list-columns > build/columns.txt
+      - name: Compare with tests/columns.txt
+        run: diff -u tests/columns.txt build/columns.txt

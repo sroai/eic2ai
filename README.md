@@ -26,6 +26,10 @@ start or stopped (bad options, unreadable input, pairing guard).
 Design, readability rules, phases and the parity gate: `eic2ai-plan.md` in the parent
 repository; the rationale in `eic2ai-intention.md`.
 
+Every column of every output is described at
+[sroai.github.io/ai-epic-background/csv-schema](https://sroai.github.io/ai-epic-background/csv-schema). A change of
+the columns ships with that page; `AGENTS.md` lists the steps.
+
 ## Reading order
 
 Open these five files in sequence to understand the whole program:
@@ -59,6 +63,10 @@ src/writer_<Role>Writer.hpp    one header per role
 src/WritersRegistry.hpp/.cpp   role → writer table; --writers auto; --list-writers
 tests/parity.py                byte comparison against the csv_convert macro outputs (header through the rename table)
 tests/check_columns.py         the column vocabulary check
+tests/check_schema.py          the website's CSV Schema page lists every column, in order (AGENTS.md)
+tests/columns.txt              the committed `eic2ai --list-columns` output that CI checks
+.github/workflows/csv-schema.yml  CI: both checks on tests/columns.txt; an eic_xl build prints the same file
+website/                       submodule sroai/sroai.github.io; ai-epic-background/csv-schema.yaml documents every column
 tests/rename_consumer_columns.py  rewrites macro-era column names in a consumer file
 column_renames.py              macro-era → unified column names, per output
 tests/make_references.sh       runs a macro executable on the reference inputs

@@ -19,7 +19,7 @@ import sys
 PREFIXES = ("prt", "trk_hit", "cal_hit", "clu", "rec", "cand", "hit",
             "lam", "prot", "pimin", "neut", "pizero", "gamone", "gamtwo", "true_prot", "true_pimin",
             "elec", "mc_elec", "mc_lam", "ff_lam", "mc_beam_prot", "mc_beam_elec", "mc",
-            "da", "esigma", "electron", "jb", "ml", "sigma")
+            "da", "esigma", "electron", "jb", "ml", "sigma", "truth")
 
 QUANTITIES = {
     "index", "pdg", "gen_status", "sim_status", "origin", "mass", "energy", "charge",
