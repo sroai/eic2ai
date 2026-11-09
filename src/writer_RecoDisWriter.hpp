@@ -2,16 +2,30 @@
 //
 // Needs: reco. Collections read: the seven InclusiveKinematics* collections (one method each),
 // MCParticles (beam proton, beam and scattered electron, the Λ), ReconstructedLambdas (the
-// far-forward Λ) and, through the electron method's scat relation, the reconstructed electron.
+// far-forward Λ), through the electron method's scat relation the reconstructed electron, and
+// ScatteredElectronsEMinusPz (the electron candidates ranked by E − pz).
 // Columns: event; x, q2, y, nu, w per method (da, esigma, electron, jb, ml, sigma, truth); the true
 // mc_* values from the generator's frame parameters; Mandelstam t of the Λ against the true
 // and the assumed beam proton; the reconstructed electron; MC momenta of the scattered
-// electron, the Λ, the far-forward Λ, the beam proton and the beam electron.
+// electron, the Λ, the far-forward Λ, the beam proton and the beam electron. Added 2026-11
+// after them: the MCParticles indices of the scattered electron and the Λ, the Λ's decay code
+// (lambda_decay.hpp) and decay point, the generated vertex (the scattered electron's production
+// vertex), and the E − pz electron candidate.
+//
+// Two electrons: elec_* is the electron method's scattered electron, which EICrecon 1.43 takes
+// from ScatteredElectronsTruth (the reconstructed particle matched to the MC scattered
+// electron; elec_index indexes ReconstructedChargedParticles, track only, no cluster).
+// elec_epz_* is the first of ScatteredElectronsEMinusPz: the electrons of
+// ReconstructedElectronsForDIS (E/p 0.9 to 1.2) ranked by the E − pz of the event with that
+// electron, highest first; no truth enters it (elec_epz_index indexes ReconstructedParticles,
+// the rec_index of reco_particles). elec_epz_n_candidates counts that collection.
 //
 // An event without a beam proton among MCParticles yields no row (the macro's behavior;
 // background-merged frames have none). Port of csv_convert/edm4eic_reco_dis.cxx; rows are
-// byte-identical to the macro's except the added truth_* block, the header follows
-// column_renames.py (evt, elec_index,
+// byte-identical to the macro's except the added truth_* block, the assumed-beam t columns
+// (mc_lam_exp_t, ff_lam_exp_t: the macro's beam was at +25 mrad, finding F1 of
+// dis-autoresearch, eic2ai-space/reports/findings_applied_2026-11.md) and the columns added
+// after the macro's last one. The header follows column_renames.py (evt, elec_index,
 // *_mom_x, *_ref_pos_x; the parallel kinematics blocks keep their names). Trap: the 35
 // kinematics columns use ostream formatting
 // (stream_text, 6 significant digits); every other number uses fmt. The four-vector arithmetic
@@ -19,6 +33,7 @@
 #pragma once
 
 #include "Writer.hpp"
+#include "lambda_decay.hpp"
 #include "legacy_format.hpp"
 
 #include <edm4eic/InclusiveKinematicsCollection.h>
@@ -27,6 +42,7 @@
 #include <fmt/core.h>
 
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -36,8 +52,8 @@ public:
     Needs needs() const override { return Needs{.reco = true, .sim = false}; }
 
     std::vector<std::string> collections() const override {
-        std::vector<std::string> names = {"MCParticles", "ReconstructedLambdas",
-                                          "ReconstructedElectrons", "ReconstructedChargedParticles", "ReconstructedParticles"};
+        std::vector<std::string> names = {"MCParticles", "ReconstructedLambdas", "ReconstructedElectrons",
+                                          "ReconstructedChargedParticles", "ReconstructedParticles", "ScatteredElectronsEMinusPz"};
         for (const auto& [method, collection] : kinematics_methods()) names.push_back(collection);
         return names;
     }
@@ -53,6 +69,11 @@ public:
                   "elec_pid_goodness,elec_type,elec_n_clusters,elec_n_tracks,elec_n_particles,elec_n_particle_ids";
         header += ",mc_elec_mom_x,mc_elec_mom_y,mc_elec_mom_z,mc_lam_mom_x,mc_lam_mom_y,mc_lam_mom_z,ff_lam_mom_x,ff_lam_mom_y,ff_lam_mom_z,"
                   "mc_beam_prot_mom_x,mc_beam_prot_mom_y,mc_beam_prot_mom_z,mc_beam_elec_mom_x,mc_beam_elec_mom_y,mc_beam_elec_mom_z";
+        header += ",mc_elec_index,mc_lam_index,mc_lam_decay,mc_lam_end_pos_x,mc_lam_end_pos_y,mc_lam_end_pos_z,"
+                  "mc_vtx_pos_x,mc_vtx_pos_y,mc_vtx_pos_z,mc_vtx_time";
+        header += ",elec_epz_n_candidates,elec_epz_index,elec_epz_energy,elec_epz_mom_x,elec_epz_mom_y,elec_epz_mom_z,"
+                  "elec_epz_ref_pos_x,elec_epz_ref_pos_y,elec_epz_ref_pos_z,elec_epz_pid_goodness,elec_epz_type,"
+                  "elec_epz_n_clusters,elec_epz_n_tracks,elec_epz_n_particles,elec_epz_n_particle_ids";
         return header;
     }
 
@@ -87,8 +108,11 @@ private:
     }
 
     /// The beam proton as an experiment would assume it: the nominal momentum of the running
-    /// mode closest to the true beam (41, 100, 130 or 275 GeV/c) with the crossing angles
-    /// applied. Unset when no mode is within 10 GeV (a wrongly-picked proton in a merged
+    /// mode closest to the true beam (41, 100, 130 or 275 GeV/c) along the ePIC proton beam
+    /// direction, -25 mrad in x and +0.1 mrad in y (the afterburned beams of the 2026-07 and
+    /// 2026-11 samples: -25.02 and +0.0975 mrad). The macro used +25 mrad, 50 mrad away from the
+    /// beam, which put mc_lam_exp_t 18 to 29 times above mc_true_t (dis-autoresearch F1).
+    /// Unset when no mode is within 10 GeV (a wrongly-picked proton in a merged
     /// frame): the t-against-assumed-beam columns stay empty and the row survives — a throw
     /// here would discard the whole role for the file.
     static FourVector approximate_beam_proton(const FourVector& true_beam_proton) {
@@ -100,7 +124,7 @@ private:
         if (nominal_momentum == 0.0) {
             return FourVector{};
         }
-        constexpr double crossing_angle_horizontal = 25e-3;   // rad
+        constexpr double crossing_angle_horizontal = -25e-3;  // rad; the proton beam points to -x
         constexpr double crossing_angle_vertical = 100e-6;    // rad
         const double px = nominal_momentum * std::sin(crossing_angle_horizontal);
         const double py = nominal_momentum * std::sin(crossing_angle_vertical) * std::cos(crossing_angle_horizontal);
@@ -113,6 +137,8 @@ private:
         FourVector beam_electron;       // the first generatorStatus-4 electron, else the first electron
         FourVector scattered_electron;  // the first electron after the beam electron
         FourVector lambda;              // the first Λ; the scan stops there
+        std::optional<edm4hep::MCParticle> scattered_electron_particle;   // the particles behind the two vectors above
+        std::optional<edm4hep::MCParticle> lambda_particle;
     };
 
     /// Beam particles carry generatorStatus 4 (HepMC convention). Preferring it over "first of
@@ -140,11 +166,13 @@ private:
                     found_scattered_electron = false;   // scattered = first electron after the beam
                 } else if (!found_scattered_electron) {
                     found.scattered_electron = four_vector(momentum.x, momentum.y, momentum.z, electron_mass);
+                    found.scattered_electron_particle = particle;
                     found_scattered_electron = true;
                 }
             }
             if (particle.getPDG() == 3122 && !found.lambda.set()) {
                 found.lambda = four_vector(momentum.x, momentum.y, momentum.z, lambda_mass);
+                found.lambda_particle = particle;
             }
             // The scan stops at the first Λ once the other particles are in hand. In merged
             // pythia8 frames a Λ can precede the beams; stopping there would lose the row.
@@ -187,6 +215,39 @@ private:
 
     static std::string optional_number(bool present, double value) {
         return present ? fmt::format("{}", value) : "";
+    }
+
+    /// mc_elec_index ... mc_vtx_time: indices, the Λ decay code and point, the generated vertex. Empty fields for a particle not found.
+    static std::string generated_event_columns(const McKinematics& mc) {
+        std::string columns;
+        const auto& electron = mc.scattered_electron_particle;
+        const auto& lambda = mc.lambda_particle;
+        columns += electron ? fmt::format(",{}", electron->getObjectID().index) : ",";
+        if (lambda) {
+            const auto end = lambda->getEndpoint();
+            columns += fmt::format(",{},{},{},{},{}", lambda->getObjectID().index, classify_lambda_decay(*lambda).type, end.x, end.y, end.z);
+        } else {
+            columns += ",,,,,";
+        }
+        if (electron) {
+            const auto vertex = electron->getVertex();
+            columns += fmt::format(",{},{},{},{}", vertex.x, vertex.y, vertex.z, electron->getTime());
+        } else {
+            columns += ",,,,";
+        }
+        return columns;
+    }
+
+    /// elec_epz_n_candidates and the elec_epz_* block: the first candidate of ScatteredElectronsEMinusPz.
+    /// All empty when the file has no such collection; the block empty when it holds no candidate.
+    std::string e_minus_pz_electron_columns(const podio::Frame& reco) {
+        const auto* candidates = get_optional_collection<edm4eic::ReconstructedParticleCollection>(reco, "ScatteredElectronsEMinusPz");
+        if (!candidates) {
+            skip_notes.note("ScatteredElectronsEMinusPz", "collection not in file");
+            return "," + std::string(14, ',');   // 15 empty fields
+        }
+        if (candidates->empty()) return fmt::format(",0{}", std::string(14, ','));
+        return fmt::format(",{},{}", candidates->size(), electron_columns((*candidates)[0]));
     }
 
     void write_event(const EventInputs& inputs) override {
@@ -250,6 +311,8 @@ private:
         line += momentum_columns(ff_lambda);
         line += momentum_columns(mc.beam_proton);
         line += momentum_columns(mc.beam_electron);
+        line += generated_event_columns(mc);
+        line += e_minus_pz_electron_columns(reco);
         write_row(line);
     }
 };

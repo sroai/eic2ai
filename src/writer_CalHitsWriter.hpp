@@ -3,10 +3,12 @@
 // Needs: reco + sim. Collections read: the *RecHits (edm4eic::CalorimeterHit) collections of
 // the reco frame and the paired *Hits (edm4hep::SimCalorimeterHit) collections of the sim
 // frame listed below; through the relations, the sim frame's CaloHitContributions and
-// MCParticles.
+// MCParticles. For the barrel ScFi layer, the reco frame's EcalBarrelScFiPAttenuatedHits instead
+// (see below).
 // Columns: evt, rec_collection, the cal_hit_* block (digitized quantities, the inference-legal
 // features), the sim_* truth aggregates of the cell, label_purity, the prt_* block of the
-// representative particle.
+// representative particle, then the generator particle that particle descends from and that
+// particle's daughter on the way (prt_primary_*, prt_primary_child_*; origin.hpp).
 //
 // The reco output carries no calorimeter hit ↔ MCParticle association, so the join runs on
 // (event, cellID): every rec hit's cell is looked up among the event's sim hits. A cell with
@@ -14,9 +16,21 @@
 // label_purity = that class's energy fraction, and the prt_* block of the largest contributor
 // of that class. A rec hit whose cell has no sim hit keeps its features and prt_origin 0.
 //
-// Port of csv_convert/edm4eic_cal_hits.cxx (process_detector); rows are byte-identical to the
-// macro's, the header follows column_renames.py (prt_status → prt_gen_status, rec_collection →
-// cal_hit_collection). Trap: ties in the majority vote resolve to the lower origin value and, inside a
+// Barrel ScFi (EcalBarrelScFiRecHits, system 105): the rec hits sit on a merged readout cell
+// that no per-fiber sim hit of the sim frame shares, so that join never matches (finding F2 of
+// dis-autoresearch). EICrecon writes the merged cells into the reco frame as
+// EcalBarrelScFiPAttenuatedHits and ...NAttenuatedHits (one per fiber end, same cellIDs as the rec
+// hits, contributions per particle with the raw deposited energy, times shifted by the light
+// propagation to that end). The writer joins the ScFi rec hits with the P-end collection when
+// the reco frame has it, else with the sim frame as before. There: sim_energy is the raw deposit
+// (the P and N ends both sum to the sim frame's total), n_contrib counts merged contributions, and
+// sim_time is the earliest arrival at the P end, about 10 ns after the Geant4 time.
+//
+// Port of csv_convert/edm4eic_cal_hits.cxx (process_detector); the macro's columns are
+// byte-identical to its rows except the truth of the ScFi rows (2026-11, eic2ai-space/reports/
+// findings_applied_2026-11.md), the header follows column_renames.py (prt_status →
+// prt_gen_status, rec_collection → cal_hit_collection); the four prt_primary_* columns were added
+// after them. Trap: ties in the majority vote resolve to the lower origin value and, inside a
 // class, to the lower particle key (std::map order); change the containers and the labels of
 // tied cells change.
 #pragma once
@@ -48,6 +62,10 @@ public:
             names.push_back(sim_name);
             names.push_back(sim_name + "Contributions");
         }
+        for (const RecoFrameTruth& truth : reco_frame_truth()) {
+            names.push_back(truth.sim_hits);
+            names.push_back(truth.contributions);
+        }
         return names;
     }
 
@@ -59,7 +77,8 @@ public:
                "prt_index,prt_pdg,prt_gen_status,prt_origin,prt_energy,prt_charge,"
                "prt_mom_x,prt_mom_y,prt_mom_z,"
                "prt_vtx_time,prt_vtx_pos_x,prt_vtx_pos_y,prt_vtx_pos_z,"
-               "prt_end_pos_x,prt_end_pos_y,prt_end_pos_z";
+               "prt_end_pos_x,prt_end_pos_y,prt_end_pos_z,"
+               "prt_primary_index,prt_primary_pdg,prt_primary_child_index,prt_primary_child_pdg";
     }
 
 private:
@@ -101,8 +120,13 @@ private:
         float prt_end_pos_y;             // endpoint y [mm]
         float prt_end_pos_z;             // endpoint z [mm]
 
+        int64_t prt_primary_index = -1;  // MCParticles index of the generator particle prt descends from (prt itself when it is one); -1 without one
+        int32_t prt_primary_pdg = 0;     // its PDG code (0 with index -1)
+        int64_t prt_primary_child_index = -1;   // the primary's daughter on the chain from prt (the Λ decay product for a Λ); -1 when prt is the primary
+        int32_t prt_primary_child_pdg = 0;      // its PDG code (0 with index -1)
+
         std::string csv_line() const {
-            return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 evt, cal_hit_collection, cal_hit_cell_id, cal_hit_system_id, cal_hit_system_name,
                 cal_hit_pos_x, cal_hit_pos_y, cal_hit_pos_z,
                 cal_hit_energy, cal_hit_energy_err, cal_hit_time, cal_hit_time_err,
@@ -110,7 +134,8 @@ private:
                 prt_index, prt_pdg, prt_gen_status, prt_origin, prt_energy, prt_charge,
                 prt_mom_x, prt_mom_y, prt_mom_z,
                 prt_vtx_time, prt_vtx_pos_x, prt_vtx_pos_y, prt_vtx_pos_z,
-                prt_end_pos_x, prt_end_pos_y, prt_end_pos_z);
+                prt_end_pos_x, prt_end_pos_y, prt_end_pos_z,
+                prt_primary_index, prt_primary_pdg, prt_primary_child_index, prt_primary_child_pdg);
         }
     };
 
@@ -131,6 +156,20 @@ private:
             {"HcalFarForwardZDCRecHits",    "HcalFarForwardZDCHits"},
         };
         return pairs;
+    }
+
+    /// A rec-hit collection whose cell truth the reco frame carries: used instead of the sim frame's
+    /// pair when the reco frame has it (the ScFi readout, see the top).
+    struct RecoFrameTruth {
+        std::string rec_hits;        // the rec-hit collection
+        std::string sim_hits;        // the reco frame's edm4hep::SimCalorimeterHit collection on the same cellIDs
+        std::string contributions;   // its contributions (a relation target, read with it)
+    };
+    static const std::vector<RecoFrameTruth>& reco_frame_truth() {
+        static const std::vector<RecoFrameTruth> table = {
+            {"EcalBarrelScFiRecHits", "EcalBarrelScFiPAttenuatedHits", "EcalBarrelScFiPAttenuatedHitContributions"},
+        };
+        return table;
     }
 
     uint64_t unmatched_rec_hits_ = 0;   // rec hits whose cellID has no sim hit (written with prt_origin 0)
@@ -159,18 +198,19 @@ private:
         }
         if (rec_hits->empty()) return;
 
-        const auto* sim_hits = get_optional_collection<edm4hep::SimCalorimeterHitCollection>(sim, sim_name);
+        const auto* sim_hits = reco_frame_sim_hits(reco, rec_name);
+        if (!sim_hits) sim_hits = get_optional_collection<edm4hep::SimCalorimeterHitCollection>(sim, sim_name);
         if (!sim_hits) {
             skip_notes.note(sim_name, "sim-hit collection not in sim file");
             return;
         }
 
-        // The join index: this event's sim cells by cellID. dd4hep aggregates the contributions
-        // of a cell into one sim hit per event.
-        std::unordered_map<uint64_t, edm4hep::SimCalorimeterHit> sim_by_cell;
+        // The join index: this event's sim hits by cellID. dd4hep aggregates the contributions of a
+        // cell into one sim hit per event; the ScFi attenuated hits split a cell over several hits.
+        std::unordered_map<uint64_t, std::vector<edm4hep::SimCalorimeterHit>> sim_by_cell;
         sim_by_cell.reserve(sim_hits->size());
         for (const auto& sim_hit : *sim_hits) {
-            sim_by_cell.emplace(sim_hit.getCellID(), sim_hit);
+            sim_by_cell[sim_hit.getCellID()].push_back(sim_hit);
         }
 
         for (const auto& rec_hit : *rec_hits) {
@@ -200,8 +240,19 @@ private:
         }
     }
 
-    /// Fills the sim_* aggregates, label_purity and the prt_* block from the cell's contributions.
-    void label_from_sim_cell(const edm4hep::SimCalorimeterHit& sim_hit, Record& record) {
+    /// The reco frame's truth collection for this rec-hit collection, or nullptr (none listed, or not in the file).
+    const edm4hep::SimCalorimeterHitCollection* reco_frame_sim_hits(const podio::Frame& reco, const std::string& rec_name) {
+        for (const RecoFrameTruth& truth : reco_frame_truth()) {
+            if (truth.rec_hits != rec_name) continue;
+            const auto* hits = get_optional_collection<edm4hep::SimCalorimeterHitCollection>(reco, truth.sim_hits);
+            if (!hits) skip_notes.note(truth.sim_hits, "not in reco file; truth from the sim frame");
+            return hits;
+        }
+        return nullptr;
+    }
+
+    /// Fills the sim_* aggregates, label_purity and the prt_* block from the contributions of the cell's sim hits.
+    void label_from_sim_cell(const std::vector<edm4hep::SimCalorimeterHit>& cell_hits, Record& record) {
         double energy_total = 0.0;
         float time_earliest = std::numeric_limits<float>::max();
         std::map<int32_t, double> energy_by_origin;
@@ -209,6 +260,7 @@ private:
         std::map<uint64_t, edm4hep::MCParticle> particle_by_key;
         int32_t contribution_count = 0;
 
+        for (const auto& sim_hit : cell_hits)
         for (const auto& contribution : sim_hit.getContributions()) {
             if (!contribution.isAvailable()) continue;
             ++contribution_count;
@@ -254,5 +306,11 @@ private:
         record.prt_end_pos_x = particle.getEndpoint().x;
         record.prt_end_pos_y = particle.getEndpoint().y;
         record.prt_end_pos_z = particle.getEndpoint().z;
+
+        const PrimaryAncestry ancestry = find_primary_ancestry(particle);
+        record.prt_primary_index = ancestry.primary_index;
+        record.prt_primary_pdg = ancestry.primary_pdg;
+        record.prt_primary_child_index = ancestry.child_index;
+        record.prt_primary_child_pdg = ancestry.child_pdg;
     }
 };

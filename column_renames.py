@@ -11,15 +11,24 @@ Rows never changed: every rename is a header change alone.
 Vocabulary (prefix + quantity): a prefix names the object (prt, trk_hit, cal_hit, clu, rec, cand,
 hit, lam, prot, pimin, neut, pizero, gamone, gamtwo, elec, mc_*, ff_lam, ...), the quantity is one of
 the names below. tests/check_columns.py enforces the set on every header eic2ai prints.
+Prefixes added 2026-11 (eic2ai-space/reports/findings_applied_2026-11.md), new columns only, no rename:
+  prt_primary, prt_primary_child   the generator particle a hit's particle descends from, and its
+                                    daughter on that chain (trk_hits, cal_hits)
+  elec_epz                          the E - pz ranked electron candidate (reco_dis), beside elec (truth-matched)
+  mc_vtx_*                          the generated vertex (reco_dis; prefix mc)
+Contract change 2026-11 (eic2ai-space QUESTIONS.md Q25 B), calo_clusters: clu_index is the cluster's index in
+its cluster collection (it was the association's index); clu_link_index is the association's index.
+  It is a value change, so it stays out of OLD_TO_NEW (the table stays safe to apply to a new CSV): in a
+  calo_clusters CSV written before it (macro or eic2ai), clu_index is what is now clu_link_index.
 
   evt                                   0-based entry counter, the join key of every role
-  index                                 index of the object in its collection
+  index                                 index of the object in its collection; link_index that of an association
   pdg, gen_status, sim_status, origin   MC particle identity and status; origin per origin.hpp
   mass, energy, charge
   mom_x/y/z, mom, theta, eta, phi       momentum components and derived kinematics
   vtx_time, vtx_pos_x/y/z               production vertex; end_time, end_pos_x/y/z the endpoint
   n_parents, n_daughters, parent_index
-  ref_pos_x/y/z, pid_goodness, type     reconstructed particle
+  ref_pos_x/y/z, pid_goodness, type     reconstructed particle; n_candidates the size of a candidate list
   n_clusters, n_tracks, n_particles, n_particle_ids, n_cluster_hits, n_track_measurements, n_tracker_hits
   cov_xx .. cov_tt                      covariance of a reconstructed particle
   collection, cell_id, system_id, system_name, pos_x/y/z, time, pos_err_xx/yy/zz, time_err, edep, edep_err,

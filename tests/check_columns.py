@@ -16,9 +16,9 @@ import re
 import subprocess
 import sys
 
-PREFIXES = ("prt", "trk_hit", "cal_hit", "clu", "rec", "cand", "hit",
+PREFIXES = ("prt", "prt_primary", "prt_primary_child", "trk_hit", "cal_hit", "clu", "rec", "cand", "hit",
             "lam", "prot", "pimin", "neut", "pizero", "gamone", "gamtwo", "true_prot", "true_pimin",
-            "elec", "mc_elec", "mc_lam", "ff_lam", "mc_beam_prot", "mc_beam_elec", "mc",
+            "elec", "elec_epz", "mc_elec", "mc_lam", "ff_lam", "mc_beam_prot", "mc_beam_elec", "mc",
             "da", "esigma", "electron", "jb", "ml", "sigma", "truth")
 
 QUANTITIES = {
@@ -26,12 +26,12 @@ QUANTITIES = {
     "mom_x", "mom_y", "mom_z", "mom", "theta", "eta", "phi",
     "vtx_time", "vtx_pos_x", "vtx_pos_y", "vtx_pos_z", "end_time", "end_pos_x", "end_pos_y", "end_pos_z",
     "n_parents", "n_daughters", "parent_index",
-    "ref_pos_x", "ref_pos_y", "ref_pos_z", "pid_goodness", "type",
+    "ref_pos_x", "ref_pos_y", "ref_pos_z", "pid_goodness", "type", "n_candidates",
     "n_clusters", "n_tracks", "n_particles", "n_particle_ids", "n_cluster_hits", "n_track_measurements", "n_tracker_hits",
     "cov_xx", "cov_xy", "cov_xz", "cov_yy", "cov_yz", "cov_zz", "cov_xt", "cov_yt", "cov_zt", "cov_tt",
     "collection", "cell_id", "system_id", "system_name", "pos_x", "pos_y", "pos_z", "time",
     "pos_err_xx", "pos_err_yy", "pos_err_zz", "time_err", "edep", "edep_err", "energy_err", "path_length",
-    "first_cell_id", "nhits", "assoc_weight",
+    "first_cell_id", "nhits", "assoc_weight", "link_index",
     "is_first", "decay", "decay_pos_x", "decay_pos_y", "decay_pos_z",
     "source", "quality", "ndf", "n_measurements", "weight",
     "n_hits_b0", "n_hits_rp", "n_hits_offm", "cent", "b0trk", "rp_dp", "offm_dp",

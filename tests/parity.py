@@ -5,7 +5,14 @@ The macro output is the reference. Every CSV eic2ai writes must equal the refere
 byte after the header line, which is compared through the rename table (column_renames.py at
 the eic2ai root: the macro-era names mapped to the unified vocabulary). Tolerated deviations:
 a reference of 0 bytes (the macro wrote no row and no header) equals an eic2ai file holding
-the header line alone; the columns in WAIVED_COLUMNS are compared with those columns dropped.
+the header line alone; the columns in ADDED_COLUMNS and the rows ADDED_ROWS selects (eic2ai writes
+them, the macro did not) are cut out of the output before comparing; the columns in WAIVED_COLUMNS,
+and in the rows that WAIVED_ROWS selects, are left out of the comparison and the rows that differ
+there are counted.
+Every other field of every row stays byte-identical.
+
+The reference may also be an earlier eic2ai output (its header already in the unified names,
+which the rename table leaves unchanged): that compares two eic2ai versions the same way.
 
 Usage:
   tests/parity.py --reco R.edm4eic.root [--sim S.edm4hep.root] --roles trk_hits,cal_hits,calo_clusters
@@ -17,6 +24,7 @@ Usage:
   --out-dir    eic2ai outputs: <out-dir>/plain/ and <out-dir>/zip/, plus the run logs.
   --compress   which eic2ai modes to test (default: none,zip). Plain files are compared with
                cmp; the zip entry is streamed through zipfile and compared chunk by chunk.
+  --extra-args extra eic2ai options; an option value needs the = form: --extra-args=--selective
 
 Prints one line per role and mode: PASS, PASS (header-only vs 0-byte reference) or FAIL with the
 first differing line and column; then wall time and MaxRSS of every run. Exit code 1 on any FAIL.
@@ -38,8 +46,42 @@ _spec.loader.exec_module(column_renames)
 PAIRED_ROLES = {"cal_hits"}          # macros that take the sim file as a second input
 SIM_ROLES = {"acceptance_ppim", "acceptance_npi0", "combinatorics_ppim"}   # edm4hep_<role> macros on the sim file
 EXTRA_OUTPUTS = {"comb_candidates": ["events"], "acceptance_ppim": ["prot_hits", "pimin_hits"]}   # <stem>.<role>_<suffix>.csv
-# Columns whose values differ from the macro by decision (QUESTIONS.md Q16): compared with these columns dropped.
-WAIVED_COLUMNS = {"lambda_acceptance": {"lam_decay"}, "comb_candidates_events": {"lam_decay"}}   # new names
+# Columns whose values differ from the macro by decision: QUESTIONS.md Q16 (lam_decay), finding F1
+# (the assumed beam proton at -25 mrad, eic2ai-space/reports/findings_applied_2026-11.md) and eic2ai-space
+# QUESTIONS.md Q25 B (calo_clusters clu_index is the cluster's index, the macro's link index is clu_link_index).
+WAIVED_COLUMNS = {
+    "lambda_acceptance": {"lam_decay"},
+    "comb_candidates_events": {"lam_decay"},
+    "reco_dis": {"mc_lam_exp_t", "ff_lam_exp_t"},
+    "calo_clusters": {"clu_index"},
+}
+# Rows whose truth differs from the macro by finding F2: barrel ScFi rec hits take their truth from the
+# reco frame's attenuated sim hits. role -> (selecting column, its value, the columns left out in those rows).
+CAL_HIT_TRUTH_COLUMNS = {
+    "sim_energy", "sim_time", "n_contrib", "label_purity",
+    "prt_index", "prt_pdg", "prt_gen_status", "prt_origin", "prt_energy", "prt_charge",
+    "prt_mom_x", "prt_mom_y", "prt_mom_z", "prt_vtx_time", "prt_vtx_pos_x", "prt_vtx_pos_y", "prt_vtx_pos_z",
+    "prt_end_pos_x", "prt_end_pos_y", "prt_end_pos_z",
+}
+WAIVED_ROWS = {"cal_hits": ("cal_hit_collection", "EcalBarrelScFiRecHits", CAL_HIT_TRUTH_COLUMNS)}
+# Columns eic2ai writes and the macro did not, cut out before comparing: the truth_* block of reco_dis (eic2ai
+# 9d50517, 2026-10-04) and the 2026-11 additions after each role's last column (findings_applied_2026-11.md).
+PRIMARY_COLUMNS = ["prt_primary_index", "prt_primary_pdg", "prt_primary_child_index", "prt_primary_child_pdg"]
+ELECTRON_COLUMNS = ["index", "energy", "mom_x", "mom_y", "mom_z", "ref_pos_x", "ref_pos_y", "ref_pos_z",
+                    "pid_goodness", "type", "n_clusters", "n_tracks", "n_particles", "n_particle_ids"]
+ADDED_COLUMNS = {
+    "trk_hits": PRIMARY_COLUMNS,
+    "cal_hits": PRIMARY_COLUMNS,
+    "calo_clusters": ["clu_link_index"] + PRIMARY_COLUMNS,
+    "reco_dis": ["truth_x", "truth_q2", "truth_y", "truth_nu", "truth_w",
+                 "mc_elec_index", "mc_lam_index", "mc_lam_decay", "mc_lam_end_pos_x", "mc_lam_end_pos_y", "mc_lam_end_pos_z",
+                 "mc_vtx_pos_x", "mc_vtx_pos_y", "mc_vtx_pos_z", "mc_vtx_time", "elec_epz_n_candidates"]
+                + [f"elec_epz_{name}" for name in ELECTRON_COLUMNS],
+}
+# Rows eic2ai writes and the macro did not, cut out of the output before comparing and counted: role -> (selecting
+# column, the values that mark an added row). calo_clusters: the barrel ScFi topological clusters, a collection of the
+# EICrecon in eic_xl 26.11 that the macro's list predates (eic2ai-space QUESTIONS.md Q26 A).
+ADDED_ROWS = {"calo_clusters": ("clu_collection", {"EcalBarrelScFiTopoClusterAssociations"})}
 CHUNK = 1 << 20
 
 
@@ -103,30 +145,87 @@ def first_difference(ref_lines, out_lines):
     return None
 
 
-def compare_with_waivers(ref_path, open_output, waived, output_name):
-    """Column-wise comparison with the waived columns dropped; returns (verdict, detail)."""
-    import csv, io
-    with open(ref_path, "r", newline="") as ref_file, open_output() as out:
+def needs_column_comparison(output_name):
+    return (output_name in WAIVED_COLUMNS or output_name in WAIVED_ROWS or output_name in ADDED_COLUMNS
+            or output_name in ADDED_ROWS)
+
+
+def compare_columns(ref_path, open_output, output_name):
+    """Field-wise comparison, streamed line by line: the added columns and rows cut out, the waived fields left out.
+
+    No field of these roles holds a comma or a quote, so a line splits on commas exactly; every field that
+    is compared is compared as the bytes the two programs wrote. Returns (verdict, detail).
+    """
+    import io
+    with open(ref_path, "r", newline="") as ref, open_output() as out:
         out_text = out if isinstance(out, io.TextIOBase) else io.TextIOWrapper(out, encoding="utf-8", newline="")
-        ref_rows = list(csv.reader(ref_file))
-        out_rows = list(csv.reader(out_text))
-    if not ref_rows:
-        return ("PASS", "header-only vs 0-byte reference") if len(out_rows) == 1 else ("FAIL", "reference is empty, output has rows")
-    ref_rows[0] = column_renames.translate(output_name, ref_rows[0])
-    if ref_rows[0] != out_rows[0]:
-        return "FAIL", f"header differs: ref={ref_rows[0]} out={out_rows[0]}"
-    keep = [i for i, name in enumerate(ref_rows[0]) if name not in waived]
-    waived_index = [i for i, name in enumerate(ref_rows[0]) if name in waived]
-    if len(ref_rows) != len(out_rows):
-        return "FAIL", f"{len(ref_rows)} reference lines, {len(out_rows)} output lines"
-    changed = 0
-    for line_number, (ref_row, out_row) in enumerate(zip(ref_rows[1:], out_rows[1:]), start=2):
-        if [ref_row[i] for i in keep] != [out_row[i] for i in keep]:
-            column = next(i + 1 for i in keep if ref_row[i] != out_row[i])
-            return "FAIL", f"line {line_number} column {column}: ref={','.join(ref_row)!r} out={','.join(out_row)!r}"
-        if any(ref_row[i] != out_row[i] for i in waived_index):
-            changed += 1
-    return "PASS", f"waived {sorted(waived)}: {changed} of {len(ref_rows) - 1} rows differ there"
+        ref_header_line = ref.readline()
+        out_header = out_text.readline().rstrip("\n").split(",")
+        if not ref_header_line:
+            rest = out_text.read()
+            return ("PASS", "header-only vs 0-byte reference") if not rest and out_header != [""] \
+                else ("FAIL", "reference is empty, output has rows")
+        ref_header = column_renames.translate(output_name, ref_header_line.rstrip("\n").split(","))
+        addable = set(ADDED_COLUMNS.get(output_name, [])) - set(ref_header)
+        added = [name for name in out_header if name in addable]
+        kept = [i for i, name in enumerate(out_header) if name not in addable]   # output field of each reference column
+        if [out_header[i] for i in kept] != ref_header:
+            return "FAIL", f"header: expected {ref_header} plus added columns, got {out_header}"
+        width = len(ref_header)
+        waived = WAIVED_COLUMNS.get(output_name, set())
+        compared = [i for i, name in enumerate(ref_header) if name not in waived]
+        waived_index = [i for i, name in enumerate(ref_header) if name in waived]
+        row_selector = None
+        if output_name in WAIVED_ROWS:
+            column, value, row_waived = WAIVED_ROWS[output_name]
+            row_selector = (ref_header.index(column), value)
+            row_compared = [i for i in compared if ref_header[i] not in row_waived]
+            row_waived_index = [i for i, name in enumerate(ref_header) if name in row_waived]
+        added_rows = {"count": 0}
+        out_lines = out_text
+        if output_name in ADDED_ROWS:
+            added_column, added_values = ADDED_ROWS[output_name]
+            added_column_index = out_header.index(added_column)
+
+            def without_added_rows(lines):
+                for line in lines:
+                    if line.rstrip("\n").split(",")[added_column_index] in added_values:
+                        added_rows["count"] += 1
+                    else:
+                        yield line
+            out_lines = without_added_rows(out_text)
+        rows = changed_columns = changed_rows = selected_rows = 0
+        for line_number, (ref_line, out_line) in enumerate(itertools.zip_longest(ref, out_lines), start=2):
+            if ref_line is None or out_line is None:
+                return "FAIL", f"line {line_number}: {'reference' if ref_line is None else 'output'} ended first"
+            ref_fields = ref_line.rstrip("\n").split(",")
+            out_all = out_line.rstrip("\n").split(",")
+            if len(ref_fields) != width or len(out_all) != len(out_header):
+                return "FAIL", f"line {line_number}: {len(ref_fields)} reference fields, {len(out_all)} output fields"
+            out_fields = [out_all[i] for i in kept]
+            rows += 1
+            check, ignored = compared, waived_index
+            if row_selector and ref_fields[row_selector[0]] == row_selector[1]:
+                check, ignored = row_compared, row_waived_index
+                selected_rows += 1
+                if any(ref_fields[i] != out_fields[i] for i in ignored):
+                    changed_rows += 1
+            elif any(ref_fields[i] != out_fields[i] for i in ignored):
+                changed_columns += 1
+            for i in check:
+                if ref_fields[i] != out_fields[i]:
+                    return "FAIL", (f"line {line_number} column {i + 1} ({ref_header[i]}): "
+                                    f"ref={ref_line.rstrip()!r} out={out_line.rstrip()!r}")
+    notes = []
+    if added:
+        notes.append(f"{len(added)} added columns")
+    if added_rows["count"]:
+        notes.append(f"{added_rows['count']} added rows ({', '.join(sorted(ADDED_ROWS[output_name][1]))})")
+    if waived:
+        notes.append(f"waived {sorted(waived)}: {changed_columns} of {rows} rows differ there")
+    if row_selector:
+        notes.append(f"{selected_rows} {row_selector[1]} rows compared without their truth columns, {changed_rows} differ there")
+    return "PASS", "; ".join(notes)
 
 
 def compare_streams(ref_path, open_output, output_name):
@@ -222,8 +321,8 @@ def main():
                 if not os.path.exists(out_path):
                     verdicts.append((role, mode, "FAIL", f"missing {out_path}"))
                     continue
-                if role in WAIVED_COLUMNS:
-                    verdict, detail = compare_with_waivers(ref, lambda p=out_path: open(p, "r", newline=""), WAIVED_COLUMNS[role], role)
+                if needs_column_comparison(role):
+                    verdict, detail = compare_columns(ref, lambda p=out_path: open(p, "r", newline=""), role)
                 else:
                     verdict, detail = compare_streams(ref, lambda p=out_path: open(p, "rb"), role)
             elif mode == "zip":
@@ -237,8 +336,8 @@ def main():
                 if bad is not None or names != [csv_name]:
                     verdicts.append((role, mode, "FAIL", f"zip entries {names}, testzip {bad!r}; expected one entry {csv_name}"))
                     continue
-                if role in WAIVED_COLUMNS:
-                    verdict, detail = compare_with_waivers(ref, lambda p=out_path, n=csv_name: zipfile.ZipFile(p).open(n), WAIVED_COLUMNS[role], role)
+                if needs_column_comparison(role):
+                    verdict, detail = compare_columns(ref, lambda p=out_path, n=csv_name: zipfile.ZipFile(p).open(n), role)
                 else:
                     verdict, detail = compare_streams(ref, lambda p=out_path, n=csv_name: zipfile.ZipFile(p).open(n), role)
             else:

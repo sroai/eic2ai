@@ -61,7 +61,8 @@ src/CsvSink.hpp/.cpp           plain / zip (minizip-ng, ZIP64) / gz backends, tm
 src/Writer.hpp/.cpp            base class: output file, eager header, failure marking, summary line
 src/writer_<Role>Writer.hpp    one header per role
 src/WritersRegistry.hpp/.cpp   role → writer table; --writers auto; --list-writers
-tests/parity.py                byte comparison against the csv_convert macro outputs (header through the rename table)
+tests/parity.py                byte comparison against the csv_convert macro outputs (header through the rename table;
+                               added columns cut out, waived columns and ScFi truth rows listed in the file)
 tests/check_columns.py         the column vocabulary check
 tests/check_schema.py          the website's CSV Schema page lists every column, in order (AGENTS.md)
 tests/columns.txt              the committed `eic2ai --list-columns` output that CI checks

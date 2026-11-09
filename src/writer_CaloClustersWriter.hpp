@@ -3,12 +3,21 @@
 // Needs: reco. Collections read: the *ClusterAssociations collections listed below
 // (MCRecoClusterParticleAssociation: rec → Cluster, sim → MCParticle, weight); through the
 // relations, the cluster collections, their CalorimeterHit constituents and MCParticles.
-// Columns: evt, clu_index, clu_collection, the prt_* block (the associated particle: identity,
+// Columns: evt, clu_index (the cluster's index in its cluster collection), clu_link_index (the
+// association's index), clu_collection, the prt_* block (the associated particle: identity,
 // origin, kinematics, vertex, endpoint), the clu_* block (detector from the first constituent
-// hit, type, energy, time, size, position, errors, angles, association weight).
+// hit, type, energy, time, size, position, errors, angles, association weight), then the
+// generator particle the associated particle descends from and that particle's daughter on the
+// way (prt_primary_*, prt_primary_child_*; origin.hpp find_primary_ancestry).
 //
-// Port of csv_convert/edm4eic_calo_clusters.cxx; rows are byte-identical to the macro's, the
-// header follows column_renames.py (prt_status → prt_gen_status).
+// Port of csv_convert/edm4eic_calo_clusters.cxx; the macro's columns are byte-identical to its
+// rows, the header follows column_renames.py (prt_status → prt_gen_status); the four
+// prt_primary_* columns were added after them (2026-11, eic2ai-space/reports/
+// findings_applied_2026-11.md). Contract change 2026-11 (eic2ai-space QUESTIONS.md Q25 B): the macro's
+// clu_index was the association's index, one per row; it is now the cluster's index, so the rows of one
+// cluster share (evt, clu_collection, clu_index), and the association's index moved to clu_link_index.
+// The cluster collection is clu_collection with "ClusterAssociations" replaced by "Clusters".
+// Rows added 2026-11 (Q26 A): EcalBarrelScFiTopoClusterAssociations, which the macro's list predates.
 // Trap: a cluster carries no cellID of its own; the system comes from its first constituent
 // hit with a non-zero cellID. Some combined or truth cluster collections (EcalBarrel) persist
 // no resolvable hit relation, so clu_first_cell_id stays 0 and the system is "Unknown"; the
@@ -51,7 +60,7 @@ public:
     }
 
     std::string csv_header() const override {
-        return "evt,clu_index,clu_collection,prt_index,"
+        return "evt,clu_index,clu_link_index,clu_collection,prt_index,"
                "prt_pdg,prt_gen_status,prt_origin,prt_energy,prt_charge,"
                "prt_mom_x,prt_mom_y,prt_mom_z,"
                "prt_vtx_time,prt_vtx_pos_x,prt_vtx_pos_y,prt_vtx_pos_z,"
@@ -60,14 +69,16 @@ public:
                "clu_type,clu_energy,clu_energy_err,clu_time,clu_time_err,clu_nhits,"
                "clu_pos_x,clu_pos_y,clu_pos_z,"
                "clu_pos_err_xx,clu_pos_err_yy,clu_pos_err_zz,"
-               "clu_theta,clu_phi,clu_assoc_weight";
+               "clu_theta,clu_phi,clu_assoc_weight,"
+               "prt_primary_index,prt_primary_pdg,prt_primary_child_index,prt_primary_child_pdg";
     }
 
 private:
     /// One row: a cluster ↔ MCParticle association.
     struct Record {
         uint64_t evt;                    // entry counter
-        uint64_t clu_index;              // index of the association in its collection
+        uint64_t clu_index;              // index of the cluster in its cluster collection; rows with equal (evt, clu_collection, clu_index) are one cluster
+        uint64_t clu_link_index;         // index of the cluster ↔ MCParticle association in clu_collection
         std::string clu_collection;      // association collection name (detector + algorithm)
         uint64_t prt_index;              // index of the associated MCParticle
 
@@ -110,10 +121,14 @@ private:
         float clu_theta;                 // intrinsic polar angle [rad]
         float clu_phi;                   // intrinsic azimuthal angle [rad]
         float clu_assoc_weight;          // association weight (cluster ↔ MCParticle)
+        int64_t prt_primary_index;       // MCParticles index of the generator particle prt descends from (prt itself when it is one); -1 when the chain has none
+        int32_t prt_primary_pdg;         // its PDG code (0 with index -1)
+        int64_t prt_primary_child_index; // the primary's daughter on the chain from prt (the decay product for a particle Geant4 decays); -1 when prt is the primary
+        int32_t prt_primary_child_pdg;   // its PDG code (0 with index -1)
 
         std::string csv_line() const {
-            return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-                evt, clu_index, clu_collection, prt_index,
+            return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                evt, clu_index, clu_link_index, clu_collection, prt_index,
                 prt_pdg, prt_gen_status, prt_origin, prt_energy, prt_charge,
                 prt_mom_x, prt_mom_y, prt_mom_z,
                 prt_vtx_time, prt_vtx_pos_x, prt_vtx_pos_y, prt_vtx_pos_z,
@@ -122,7 +137,8 @@ private:
                 clu_type, clu_energy, clu_energy_err, clu_time, clu_time_err, clu_nhits,
                 clu_pos_x, clu_pos_y, clu_pos_z,
                 clu_pos_err_xx, clu_pos_err_yy, clu_pos_err_zz,
-                clu_theta, clu_phi, clu_assoc_weight);
+                clu_theta, clu_phi, clu_assoc_weight,
+                prt_primary_index, prt_primary_pdg, prt_primary_child_index, prt_primary_child_pdg);
         }
     };
 
@@ -135,6 +151,7 @@ private:
             "EcalBarrelClusterAssociations",
             "EcalBarrelImagingClusterAssociations",
             "EcalBarrelScFiClusterAssociations",
+            "EcalBarrelScFiTopoClusterAssociations",   // EICrecon of eic_xl 26.11 on; built from EcalBarrelScFiRecHits (Q26 A)
             "EcalBarrelTruthClusterAssociations",
 
             "EcalEndcapNClusterAssociations",
@@ -211,7 +228,8 @@ private:
 
             Record record{};
             record.evt = evt;
-            record.clu_index = association.getObjectID().index;
+            record.clu_index = cluster.getObjectID().index;
+            record.clu_link_index = association.getObjectID().index;
             record.clu_collection = association_name;
             record.prt_index = particle.getObjectID().index;
 
@@ -251,6 +269,12 @@ private:
             record.clu_theta = cluster.getIntrinsicTheta();
             record.clu_phi = cluster.getIntrinsicPhi();
             record.clu_assoc_weight = association.getWeight();
+
+            const PrimaryAncestry ancestry = find_primary_ancestry(particle);
+            record.prt_primary_index = ancestry.primary_index;
+            record.prt_primary_pdg = ancestry.primary_pdg;
+            record.prt_primary_child_index = ancestry.child_index;
+            record.prt_primary_child_pdg = ancestry.child_pdg;
 
             write_row(record.csv_line());
         }

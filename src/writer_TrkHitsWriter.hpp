@@ -5,10 +5,14 @@
 // collection paired with each; through the relations, MCParticles and the Sim*Hits copies the
 // reco file carries.
 // Columns: evt, hit_index, the prt_* block (particle identity, origin, kinematics, vertex,
-// endpoint), the trk_hit_* block (cellID, system, position, time, errors, energy deposit).
+// endpoint), the trk_hit_* block (cellID, system, position, time, errors, energy deposit), then
+// the generator particle the hit's particle descends from and that particle's daughter on the way
+// (prt_primary_*, prt_primary_child_*; origin.hpp find_primary_ancestry).
 //
-// Port of csv_convert/edm4eic_trk_hits.cxx (process_tracker_hits); rows are byte-identical to
-// the macro's, the header follows column_renames.py (prt_status → prt_gen_status). Trap: the TrackerHit of a raw hit is found by a linear scan of the RecHits
+// Port of csv_convert/edm4eic_trk_hits.cxx (process_tracker_hits); the macro's columns are
+// byte-identical to its rows, the header follows column_renames.py (prt_status → prt_gen_status);
+// the four prt_primary_* columns were added after them (2026-11, eic2ai-space/reports/
+// findings_applied_2026-11.md). Trap: the TrackerHit of a raw hit is found by a linear scan of the RecHits
 // collection (first match by rawHit id), as in the macro. Keep the scan until the parity gate
 // has passed on a faster lookup.
 #pragma once
@@ -45,7 +49,8 @@ public:
                "trk_hit_cell_id,trk_hit_system_id,trk_hit_system_name,"
                "trk_hit_pos_x,trk_hit_pos_y,trk_hit_pos_z,trk_hit_time,"
                "trk_hit_pos_err_xx,trk_hit_pos_err_yy,trk_hit_pos_err_zz,trk_hit_time_err,"
-               "trk_hit_edep,trk_hit_edep_err";
+               "trk_hit_edep,trk_hit_edep_err,"
+               "prt_primary_index,prt_primary_pdg,prt_primary_child_index,prt_primary_child_pdg";
     }
 
 private:
@@ -92,8 +97,13 @@ private:
         float trk_hit_edep;              // energy deposited in the sensor [GeV]
         float trk_hit_edep_err;          // energy deposit uncertainty [GeV]
 
+        int64_t prt_primary_index;       // MCParticles index of the generator particle prt descends from (prt itself when it is one); -1 when the chain has none
+        int32_t prt_primary_pdg;         // its PDG code (0 with index -1)
+        int64_t prt_primary_child_index; // the primary's daughter on the chain from prt (the Λ decay product for a Λ); -1 when prt is the primary
+        int32_t prt_primary_child_pdg;   // its PDG code (0 with index -1)
+
         std::string csv_line() const {
-            return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            return fmt::format("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
                 evt, hit_index, prt_index,
                 prt_pdg, prt_gen_status, prt_origin, prt_energy, prt_charge,
                 prt_mom_x, prt_mom_y, prt_mom_z,
@@ -102,7 +112,8 @@ private:
                 trk_hit_cell_id, trk_hit_system_id, trk_hit_system_name,
                 trk_hit_pos_x, trk_hit_pos_y, trk_hit_pos_z, trk_hit_time,
                 trk_hit_pos_err_xx, trk_hit_pos_err_yy, trk_hit_pos_err_zz, trk_hit_time_err,
-                trk_hit_edep, trk_hit_edep_err);
+                trk_hit_edep, trk_hit_edep_err,
+                prt_primary_index, prt_primary_pdg, prt_primary_child_index, prt_primary_child_pdg);
         }
     };
 
@@ -215,6 +226,12 @@ private:
             record.trk_hit_time_err = rec_hit->getTimeError();
             record.trk_hit_edep = rec_hit->getEdep();
             record.trk_hit_edep_err = rec_hit->getEdepError();
+
+            const PrimaryAncestry ancestry = find_primary_ancestry(particle);
+            record.prt_primary_index = ancestry.primary_index;
+            record.prt_primary_pdg = ancestry.primary_pdg;
+            record.prt_primary_child_index = ancestry.child_index;
+            record.prt_primary_child_pdg = ancestry.child_pdg;
 
             write_row(record.csv_line());
         }
